@@ -95,34 +95,72 @@ def hex_color(rgb):
 
 # ── Core operations ──────────────────────────────────────────────────────────
 
+def _as_rgb(rgb):
+    """Convert 0-1 float RGB to AppleScript 0-65535 integer list."""
+    return "{%d, %d, %d}" % (int(rgb[0]*65535), int(rgb[1]*65535), int(rgb[2]*65535))
+
+
 def apply_terminal_theme(theme):
-    with open(TERMINAL_PLIST, "rb") as f:
-        plist = plistlib.load(f)
-
-    ws = plist.setdefault("Window Settings", {})
+    """Apply theme via AppleScript (live, no restart needed) + persist to plist."""
     name = theme["name"]
-    profile = ws.get(name, {})
+    colors = theme.get("colors", {})
 
-    for key, plist_key in COLOR_MAP.items():
-        if key in theme.get("colors", {}):
-            profile[plist_key] = make_nscolor(theme["colors"][key])
+    color_props = {
+        "background color": colors.get("background"),
+        "normal text color": colors.get("foreground"),
+        "bold text color": colors.get("bold") or colors.get("foreground"),
+        "cursor color": colors.get("cursor"),
+        "selection color": colors.get("selection"),
+    }
+    set_lines = []
+    for prop, rgb in color_props.items():
+        if rgb:
+            set_lines.append(
+                f'            set {prop} of current settings of w to {_as_rgb(rgb)}'
+            )
+    set_block = "\n".join(set_lines)
 
-    for key, plist_key in ANSI_MAP.items():
-        if key in theme.get("ansi", {}):
-            profile[plist_key] = make_nscolor(theme["ansi"][key])
+    # Set colors directly on every open window (immediate effect, no profile lookup needed)
+    script = f'''
+tell application "Terminal"
+    repeat with w in windows
+        try
+{set_block}
+        end try
+    end repeat
+end tell
+'''
+    result = subprocess.run(["osascript", "-e", script], capture_output=True, text=True)
 
-    profile["name"] = name
-    profile["type"] = "Window Settings"
-    profile["ProfileCurrentVersion"] = 2.07
-    profile.setdefault("FontAntialias", True)
-
-    ws[name] = profile
-    plist["Default Window Settings"] = name
-
-    with open(TERMINAL_PLIST, "wb") as f:
-        plistlib.dump(plist, f)
-
+    # Persist to plist so new Terminal windows also get the theme
+    _persist_to_plist(theme)
     return name
+
+
+def _persist_to_plist(theme):
+    """Write theme to Terminal.app plist for persistence across restarts."""
+    try:
+        with open(TERMINAL_PLIST, "rb") as f:
+            plist = plistlib.load(f)
+        ws = plist.setdefault("Window Settings", {})
+        name = theme["name"]
+        profile = ws.get(name, {})
+        for key, plist_key in COLOR_MAP.items():
+            if key in theme.get("colors", {}):
+                profile[plist_key] = make_nscolor(theme["colors"][key])
+        for key, plist_key in ANSI_MAP.items():
+            if key in theme.get("ansi", {}):
+                profile[plist_key] = make_nscolor(theme["ansi"][key])
+        profile["name"] = name
+        profile["type"] = "Window Settings"
+        profile["ProfileCurrentVersion"] = 2.07
+        profile.setdefault("FontAntialias", True)
+        ws[name] = profile
+        plist["Default Window Settings"] = name
+        with open(TERMINAL_PLIST, "wb") as f:
+            plistlib.dump(plist, f)
+    except Exception:
+        pass
 
 
 def apply_cc_theme(cc_theme):
@@ -137,17 +175,7 @@ def apply_cc_theme(cc_theme):
 
 
 def apply_to_all_windows(profile_name):
-    script = f'''
-tell application "Terminal"
-    set targetProfile to settings set "{profile_name}"
-    repeat with i from 1 to count of windows
-        try
-            set current settings of window i to targetProfile
-        end try
-    end repeat
-end tell
-'''
-    subprocess.run(["osascript", "-e", script], capture_output=True)
+    pass  # now handled inside apply_terminal_theme via AppleScript
 
 
 def get_current_theme_name():
