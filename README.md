@@ -7,7 +7,7 @@ macOS Terminal.app + Claude Code 配色方案管理工具，可作为 Claude Cod
 ## 安装（作为 Claude Code Skill）
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/terminal-palette ~/.claude/skills/terminal-palette
+git clone https://github.com/cadejay97-dotcom/terminal-palette ~/.claude/skills/terminal-palette
 ```
 
 安装后在 Claude Code 中直接说：
