@@ -100,6 +100,11 @@ def _as_rgb(rgb):
     return "{%d, %d, %d}" % (int(rgb[0]*65535), int(rgb[1]*65535), int(rgb[2]*65535))
 
 
+def _terminal_running():
+    r = subprocess.run(["pgrep", "-x", "Terminal"], capture_output=True)
+    return r.returncode == 0
+
+
 def apply_terminal_theme(theme):
     """Apply theme via AppleScript (live, no restart needed) + persist to plist."""
     name = theme["name"]
@@ -120,8 +125,18 @@ def apply_terminal_theme(theme):
             )
     set_block = "\n".join(set_lines)
 
-    # Set colors directly on every open window (immediate effect, no profile lookup needed)
-    script = f'''
+    as_ok = False
+    win_count = 0
+    if _terminal_running():
+        count_script = 'tell application "Terminal" to count windows'
+        cr = subprocess.run(["osascript", "-e", count_script], capture_output=True, text=True)
+        if cr.returncode == 0:
+            try:
+                win_count = int(cr.stdout.strip())
+            except ValueError:
+                win_count = 0
+
+        script = f'''
 tell application "Terminal"
     repeat with w in windows
         try
@@ -130,11 +145,11 @@ tell application "Terminal"
     end repeat
 end tell
 '''
-    result = subprocess.run(["osascript", "-e", script], capture_output=True, text=True)
+        result = subprocess.run(["osascript", "-e", script], capture_output=True, text=True)
+        as_ok = result.returncode == 0
 
-    # Persist to plist so new Terminal windows also get the theme
     _persist_to_plist(theme)
-    return name
+    return name, as_ok, win_count
 
 
 def _persist_to_plist(theme):
@@ -164,6 +179,8 @@ def _persist_to_plist(theme):
 
 
 def apply_cc_theme(cc_theme):
+    if not os.path.exists(CC_SETTINGS):
+        return None
     with open(CC_SETTINGS, "r") as f:
         settings = json.load(f)
     old = settings.get("theme", "")
@@ -199,6 +216,8 @@ def get_current_cc_theme():
 
 def list_themes(plain=False):
     """List all themes with ANSI color swatches (or plain text)."""
+    if not plain and not sys.stdout.isatty():
+        plain = True  # captured by subprocess (e.g. Claude Code) → no ANSI
     themes = load_themes()
     current = get_current_theme_name()
     lines = [""]
@@ -253,20 +272,35 @@ def get_current():
 def apply(theme_key):
     themes = load_themes()
     if theme_key not in themes:
-        available = ", ".join(themes.keys())
-        return f"未知配色: {theme_key}\n可用: {available}"
+        # fuzzy match
+        matches = [k for k in themes if theme_key.lower() in k.lower()]
+        if len(matches) == 1:
+            theme_key = matches[0]
+        else:
+            return f"未知配色: {theme_key}  可用: {', '.join(themes.keys())}"
 
     theme = themes[theme_key]
-    name = apply_terminal_theme(theme)
+    name, as_ok, win_count = apply_terminal_theme(theme)
     old_cc = apply_cc_theme(theme["cc_theme"])
-    apply_to_all_windows(name)
 
-    sw = swatch(theme)
+    sw = swatch(theme) if sys.stdout.isatty() else ""
+    if as_ok and win_count > 0:
+        term_status = f"已即时应用到 {win_count} 个窗口"
+    elif not _terminal_running():
+        term_status = "Terminal 未运行，配置已保存，下次打开生效"
+    else:
+        term_status = "配置已保存"
+
+    cc_line = ""
+    if old_cc is None:
+        cc_line = "\n   CC 主题          → (settings.json 不存在，已跳过)"
+    else:
+        cc_line = f"\n   CC 主题          → {theme['cc_theme']}  (原: {old_cc})"
+
     return (
         f"✅ 已切换到: {name}  {sw}\n"
-        f"   Terminal profile → {name}\n"
-        f"   CC 主题          → {theme['cc_theme']}  (原: {old_cc})\n"
-        f"   已应用到所有窗口"
+        f"   Terminal        → {term_status}"
+        f"{cc_line}"
     )
 
 
